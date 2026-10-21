@@ -1,0 +1,36 @@
+# Isolated, offline CI for one read-only pilot. No runtime deployment or secrets.
+name: Panda host preflight offline tests
+on:
+  push:
+    branches:
+      - feat/sv-claude-readonly-preflight-20261021
+    paths:
+      - 'skills/panda-host-preflight/**'
+      - '.github/workflows/panda-host-preflight.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'skills/panda-host-preflight/**'
+      - '.github/workflows/panda-host-preflight.yml'
+permissions:
+  contents: read
+jobs:
+  offline-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact submitted commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Print interpreter version (GitHub runner, not SV)
+        run: python3 --version
+      - name: Syntax validation
+        run: |
+          python3 -m py_compile skills/panda-host-preflight/scripts/preflight.py
+          python3 -m py_compile skills/panda-host-preflight/tests/test_preflight.py
+      - name: Offline tests (no network by default)
+        env:
+          PYTHONNOUSERSITE: '1'
+        run: python3 -m unittest discover -s skills/panda-host-preflight/tests -v
