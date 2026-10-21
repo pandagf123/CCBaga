@@ -25,9 +25,9 @@ The upstream CCBaga desktop UI targets local browser and identity management. It
 ## Acceptance checklist
 - [x] Feature branch isolated from main.
 - [x] Preflight and offline tests added to fork.
-- [ ] Offline tests run against exact committed source.
-- [ ] Remote branch fetch-back matches intended contents.
-- [ ] Draft PR created for review.
+- [x] Offline tests run against exact committed source: 10/10 PASS on isolated CPython 3.13; no live network.
+- [x] Remote Git blob readback matches the exact locally tested preflight.py and test_preflight.py bytes.
+- [x] Draft PR created: https://github.com/pandagf123/CCBaga/pull/1 (not merged).
 - [ ] Independent reviewer accepts the bounded code, vulnerabilities catalogued.
 - [ ] Actual target-host read-only evidence captured by an authorized channel.
 - [ ] Separate approved official Claude installation, if legal account/service access is available.
@@ -36,3 +36,6 @@ The upstream CCBaga desktop UI targets local browser and identity management. It
 - MACP capability: provider-independent read-only environment check, never credentials or identity spoofing.
 - MACP coordinator: provider startup requires runtime availability + valid approval + exclusive Writer lock; local snapshots do not prove process death.
 - WORK-OS: optional displays of already authorized evidence, not a new source of truth replacing PAC #27.
+
+## Existing GitHub-to-SV bridge assessment
+The separate MACP panda-web-bridge pilot documents only allowlisted host_status, agent_status, and explicitly opted-in isolated codex_task, not arbitrary command execution. Its documentation explicitly says creating a GitHub request is not proof a host agent executes. Do not attempt to push a raw Python/SSH command through this bridge or impersonate preflight execution. SV live evidence remains NOT_EXECUTED pending a proven authorized non-commercial host channel.
