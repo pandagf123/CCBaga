@@ -20,7 +20,9 @@ from typing import Any
 
 SCHEMA = "panda.host-preflight.v1"
 HOSTS = ("claude.ai", "api.anthropic.com", "downloads.claude.ai")
-MIN_MEMORY_MIB = 4096
+# Effective Linux MemTotal screening threshold for a nominal 4 GB VM.
+# MemTotal excludes kernel-reserved memory; this is not physical-capacity proof.
+MIN_MEMORY_MIB = 3600
 MIN_FREE_MIB = 1024
 SUPPORTED_ARCHES = {"x86_64", "aarch64", "arm64"}
 
@@ -117,6 +119,7 @@ def build_report(network: bool = False, timeout: float = 3.0) -> dict[str, Any]:
         "limitations": [
             "No Claude login or account eligibility is checked.",
             "No API subscription, authorized region, VPN or browser is assessed.",
+            "The effective memory threshold is a screening heuristic; verify physical RAM separately.",
             "Direct TLS does not prove Claude CLI proxy routing or DNS/WebRTC privacy.",
             "No credentials, local Claude identity, SSH keys or project files are read.",
         ],
