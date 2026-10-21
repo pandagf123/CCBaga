@@ -47,4 +47,7 @@ package-linux-browser.py: 旧目录移动与新目录提交共处取消/回滚�
 test-package-linux-browser.py: 四种目录移动取消恢复及取消后恢复失败保留备份；真实打包入口的首次/重建、版本/执行权限前置检查、复制/提交回滚及双重失败备份保留回归；临时样本不安装引擎，非 Linux 仅替换 uname 选择 Linux 分支。
 test-browser-cleanup.ts: 复用身份测试入口的 browser 模式，验证无缓存全清理、默认取消/强制勾选、精确删除参数、任务锁/真实 Channel 进度、失败与双语；仅内存 IPC，无原生或真实用户资料。
 test-browser-profiles.ts: 固定引擎的真实持久资料隔离回归；虚构 Cookie/LocalStorage 的 A/B 隔离、重开恢复和空资料，仅临时 HOME/本机页面。
+browser-source-manifest.json: 固定上游 GitHub release/tag commit、平台资源 URL、架构与 SHA-256；明确上游签名不可验证且 release 可变，不能把摘要一致冒充发布者认证。
+verify-browser-source-manifest.py: 只解析 fetch-browser.py AST 与静态 JSON，不运行或下载第三方代码；校验三平台固定来源映射、版本、指纹摘要和声明一致性，任意漂移 fail closed。
+test-browser-source-manifest.py: 离线负向夹具检验地址篡改、摘要错误、动态表达式、资产路径穿越、平台缺失与伪造签名声明。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
