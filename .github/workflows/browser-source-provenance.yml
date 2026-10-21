@@ -1,0 +1,56 @@
+# Check source/metadata consistency without fetching or running third-party Chromium.
+name: Browser source provenance (offline)
+on:
+  push:
+    branches:
+      - sec/browser-origin-manifest-20261021
+    paths:
+      - 'scripts/browser-source-manifest.json'
+      - 'scripts/verify-browser-source-manifest.py'
+      - 'scripts/test-browser-source-manifest.py'
+      - 'scripts/fetch-browser.py'
+      - '.github/workflows/browser-source-provenance.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/browser-source-manifest.json'
+      - 'scripts/verify-browser-source-manifest.py'
+      - 'scripts/test-browser-source-manifest.py'
+      - 'scripts/fetch-browser.py'
+      - '.github/workflows/browser-source-provenance.yml'
+permissions:
+  contents: read
+jobs:
+  offline-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact submitted head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert checkout SHA
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$EXPECTED"
+      - name: Verify syntax
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for filename in ('scripts/fetch-browser.py','scripts/verify-browser-source-manifest.py','scripts/test-browser-source-manifest.py'):
+              compile(Path(filename).read_text(encoding='utf-8'), filename, 'exec')
+          PY
+      - name: Verify pinned source contract
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/verify-browser-source-manifest.py
+      - name: Run no-network negative tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/test-browser-source-manifest.py -v
