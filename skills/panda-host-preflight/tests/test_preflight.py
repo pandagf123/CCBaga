@@ -20,11 +20,16 @@ class PreflightTests(unittest.TestCase):
     def good(self):
         return {
             "os": "linux", "arch": "x86_64", "non_root": True,
-            "memory_mib": 4096, "root_free_mib": 1024,
+            "memory_mib": 3600, "root_free_mib": 1024,
         }
 
     def test_all_minimums_pass_at_boundary(self):
         self.assertEqual(set(module.classify(self.good()).values()), {"PASS"})
+
+    def test_nominal_four_gb_vm_with_kernel_reserved_memory(self):
+        values = self.good()
+        values["memory_mib"] = 3830
+        self.assertEqual(module.classify(values)["memory_minimum"], "PASS")
 
     def test_unknown_is_not_a_success(self):
         values = self.good()
@@ -38,7 +43,7 @@ class PreflightTests(unittest.TestCase):
 
     def test_low_memory_and_disk_denied(self):
         values = self.good()
-        values["memory_mib"] = 4095
+        values["memory_mib"] = 3599
         values["root_free_mib"] = 1023
         checks = module.classify(values)
         self.assertEqual(checks["memory_minimum"], "FAIL")
