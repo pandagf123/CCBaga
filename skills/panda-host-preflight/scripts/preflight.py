@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# [INPUT]: Aggregate host metadata; fixed official TLS targets only with explicit --network.
+# [OUTPUT]: Sanitized JSON readiness observations and fail-closed status; no credentials or files.
+# [POS]: Read-only stdlib preflight for a separately authorized Claude Code pilot.
+# [PROTOCOL]: Update this header, the Skill contract, and skills/CLAUDE.md when behavior changes.
 """Non-mutating Linux host preflight for an optional official Claude Code pilot.
 
 This program never reads Claude credentials, launches Claude, invokes shell

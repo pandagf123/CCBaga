@@ -1,5 +1,6 @@
 # docs/
 > L2 | 父级: ../CLAUDE.md
+panda-ccbaga-pilot.md: fork-specific bounded pilot status, explicit safety gates, upstream review notes and future MACP/PAC boundaries; update with verified status only.
 README 与 usage.md 使用这些公开资料；不含本机账户、Apple 私钥或用户运行数据。
 brand-logos.svg: 两个品牌图并肩的圆角裁切布局，内嵌压缩副本以适配 GitHub；源图与应用图标不变。
 architecture.svg: 极客像素风的真实架构连线图，Rust 连接平台 API/浏览器回环，网络入口指向用户在 AI 中独立安装运行的 Skill，再连接 VPS 与家宽出口；应用不执行 SSH。

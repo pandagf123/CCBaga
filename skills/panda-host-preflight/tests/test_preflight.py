@@ -1,3 +1,7 @@
+# [INPUT]: Synthetic host observations and controlled mocks for external interfaces.
+# [OUTPUT]: Offline assertions for fail-closed decisions, output schema and opt-in networking.
+# [POS]: Deterministic regression suite for skills/panda-host-preflight/scripts/preflight.py.
+# [PROTOCOL]: Keep cases offline and credential-free; update skills/CLAUDE.md for module changes.
 """Offline, deterministic regression tests for the host preflight Skill."""
 from __future__ import annotations
 
