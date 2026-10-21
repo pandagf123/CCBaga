@@ -32,7 +32,7 @@ Offline unit tests, safe on a standalone clone:
 The report is structured JSON on standard output. Capture the complete JSON and process exit status; preserve original evidence locally or in a separately approved evidence store. Do not paste private credentials to any log. No credentials should appear in this program's output.
 
 ## Result interpretation
-- READY_FOR_INSTALL_REVIEW: OS/arch, non-root, >= 4096 MiB physical RAM and >= 1024 MiB free root filesystem observed. Not permission to install, not account readiness.
+- READY_FOR_INSTALL_REVIEW: OS/arch, non-root, >= 3600 MiB effective Linux MemTotal (screening heuristic for a nominal 4 GB VM) and >= 1024 MiB free root filesystem observed. Linux MemTotal is **not physical installed RAM**; verify provider plan/cgroup/resource limits separately. Not permission to install, not account readiness.
 - BLOCKED: at least one required condition actually failed; stop and investigate.
 - UNKNOWN: incomplete observation; fail closed instead of guessing.
 - claude_cli_on_path only means a command of that name resolves on the current PATH. It is not executed, authenticated or checked for provenance.
