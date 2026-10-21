@@ -80,6 +80,127 @@ def extract_fetcher(source: str) -> dict[str, dict[str, str]]:
     return found
 
 
+# This reviewed observation is pinned as a second, independent source-code value,
+# rather than trusting any 40-digit value copied into the JSON manifest.
+# It is not a publisher-signed Git tag or immutable release proof.
+AUDITED_UNSIGNED_TAG_COMMIT = "13b89eae304123f0710f2d33fd0816a2f61d7ffc"
+
+
+def attribute_call(node: ast.AST, owner: str, name: str) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == name
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == owner
+    )
+
+
+def named(node: ast.AST, identifier: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == identifier
+
+
+def literal(node: ast.AST, value: str | bool) -> bool:
+    return isinstance(node, ast.Constant) and node.value == value
+
+
+def check_call_sites(source: str) -> None:
+    """Narrow AST guard for current curl->SHA256->extraction ordering.
+
+    Not a general control-flow or arbitrary-code security proof. Unknown fetcher
+    refactors fail closed and need a new independent review.
+    """
+    tree = ast.parse(source)
+    functions: dict[str, ast.FunctionDef] = {}
+    for key in ("main", "fetch_linux", "fetch_windows"):
+        found = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == key]
+        if len(found) != 1:
+            raise SourceMismatch(f"Call-site contract: expected one {key} function")
+        functions[key] = found[0]
+
+    routes = (
+        ("macos-arm64", "main", "curl", "URL", "SHA256", "image", "hdiutil"),
+        ("linux-x86_64", "fetch_linux", "curl", "url", "digest", "archive", "tarfile"),
+        ("windows-x86_64", "fetch_windows", "curl.exe", "url", "digest", "archive", "zipfile"),
+    )
+    for platform, function, command, url_var, hash_var, archive_var, unpacker in routes:
+        node = functions[function]
+        downloads = []
+        for call in ast.walk(node):
+            if (attribute_call(call, "subprocess", "run") and call.args
+                    and isinstance(call.args[0], ast.List) and call.args[0].elts
+                    and (literal(call.args[0].elts[0], "curl") or literal(call.args[0].elts[0], "curl.exe"))):
+                downloads.append(call)
+        if len(downloads) != 1:
+            raise SourceMismatch(f"{platform}: exactly one audited curl download call required")
+        download = downloads[0]
+        args = download.args[0].elts
+        if not (
+            len(args) == 8
+            and literal(args[0], command)
+            and all(literal(args[i], expected) for i, expected in enumerate(
+                ("--fail", "--location", "--retry", "3", "--output"), start=1
+            ))
+            and isinstance(args[6], ast.Call)
+            and named(args[6].func, "str")
+            and len(args[6].args) == 1
+            and named(args[6].args[0], archive_var)
+            and named(args[7], url_var)
+            and len(download.keywords) == 1
+            and download.keywords[0].arg == "check"
+            and literal(download.keywords[0].value, True)
+        ):
+            raise SourceMismatch(f"{platform}: downloader no longer consumes the pinned URL")
+
+        checks = []
+        for block in ast.walk(node):
+            if not isinstance(block, ast.With) or len(block.items) != 1:
+                continue
+            item = block.items[0]
+            opened = item.context_expr
+            if not (isinstance(opened, ast.Call)
+                    and isinstance(opened.func, ast.Attribute)
+                    and opened.func.attr == "open"
+                    and named(opened.func.value, archive_var)
+                    and len(opened.args) == 1
+                    and literal(opened.args[0], "rb")
+                    and named(item.optional_vars, "stream")
+                    and len(block.body) == 1
+                    and isinstance(block.body[0], ast.If)):
+                continue
+            checked = block.body[0]
+            compare = checked.test
+            canonical = ast.parse("hashlib.file_digest(stream, 'sha256').hexdigest()", mode="eval").body
+            if not (isinstance(compare, ast.Compare)
+                    and len(compare.ops) == 1 and isinstance(compare.ops[0], ast.NotEq)
+                    and len(compare.comparators) == 1
+                    and named(compare.comparators[0], hash_var)
+                    and ast.dump(compare.left) == ast.dump(canonical)
+                    and not checked.orelse
+                    and len(checked.body) == 1
+                    and isinstance(checked.body[0], ast.Raise)
+                    and isinstance(checked.body[0].exc, ast.Call)
+                    and named(checked.body[0].exc.func, "SystemExit")):
+                continue
+            checks.append(checked)
+        if len(checks) != 1:
+            raise SourceMismatch(f"{platform}: enforced pinned SHA256 mismatch rejection missing")
+        checksum = checks[0]
+
+        extractors = []
+        for call in ast.walk(node):
+            if unpacker == "tarfile" and attribute_call(call, "tarfile", "open"):
+                extractors.append(call)
+            elif unpacker == "zipfile" and attribute_call(call, "zipfile", "ZipFile"):
+                extractors.append(call)
+            elif (unpacker == "hdiutil" and attribute_call(call, "subprocess", "check_output")
+                  and call.args and isinstance(call.args[0], ast.List)
+                  and call.args[0].elts and literal(call.args[0].elts[0], "hdiutil")):
+                extractors.append(call)
+        if len(extractors) != 1 or not download.lineno < checksum.lineno < extractors[0].lineno:
+            raise SourceMismatch(f"{platform}: download/check/extraction order changed")
+
+
 def validate(manifest: dict[str, Any], fetcher_source: str) -> None:
     if manifest.get("schema") != "panda.ccbaga.browser-source.v1":
         raise SourceMismatch("Unknown manifest schema")
@@ -95,9 +216,12 @@ def validate(manifest: dict[str, Any], fetcher_source: str) -> None:
         raise SourceMismatch("Malformed upstream release tag")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise SourceMismatch("Missing fixed tag commit")
+    if commit != AUDITED_UNSIGNED_TAG_COMMIT:
+        raise SourceMismatch("Reviewed unsigned tag commit changed")
     if source.get("tag_commit_verified_signature") is not False or source.get("release_immutable") is not False:
         raise SourceMismatch("Cannot claim independently verified signatures or immutable release")
     observed = extract_fetcher(fetcher_source)
+    check_call_sites(fetcher_source)
     platforms = manifest.get("platforms")
     if not isinstance(platforms, dict) or set(platforms) != set(EXPECTED_PLATFORMS):
         raise SourceMismatch("Platform set changed")
