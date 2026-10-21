@@ -13,17 +13,20 @@
     "macos-arm64": {
       "arch": "arm64",
       "asset": "ungoogled-chromium_148.0.7778.215-1.1_macos.dmg",
-      "sha256": "b72f091e2e1a7583eed389c4b8e3534ed355e568af8c8bbf8fc30a25e23ca679"
+      "sha256": "b72f091e2e1a7583eed389c4b8e3534ed355e568af8c8bbf8fc30a25e23ca679",
+      "download_url": "https://github.com/adryfish/fingerprint-chromium/releases/download/148.0.7778.215/ungoogled-chromium_148.0.7778.215-1.1_macos.dmg"
     },
     "linux-x86_64": {
       "arch": "x86_64",
       "asset": "ungoogled-chromium-148.0.7778.215-1-x86_64_linux.tar.xz",
-      "sha256": "70d239830332e5820aa34dfcb284161cac0429eee25da642830afe04bda717f4"
+      "sha256": "70d239830332e5820aa34dfcb284161cac0429eee25da642830afe04bda717f4",
+      "download_url": "https://github.com/adryfish/fingerprint-chromium/releases/download/148.0.7778.215/ungoogled-chromium-148.0.7778.215-1-x86_64_linux.tar.xz"
     },
     "windows-x86_64": {
       "arch": "x86_64",
       "asset": "ungoogled-chromium_148.0.7778.215-1.1_windows_x64.zip",
-      "sha256": "9ef3f471b7a6641b4224532522b29141ce3746e27d55788d88e2fd951f362579"
+      "sha256": "9ef3f471b7a6641b4224532522b29141ce3746e27d55788d88e2fd951f362579",
+      "download_url": "https://github.com/adryfish/fingerprint-chromium/releases/download/148.0.7778.215/ungoogled-chromium_148.0.7778.215-1.1_windows_x64.zip"
     }
   }
 }
