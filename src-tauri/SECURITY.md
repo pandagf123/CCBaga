@@ -1,6 +1,6 @@
 <!--
-[INPUT]: Linux/Windows 原生边界、共用清理/浏览器/CLI 实现、独立网络 Skill、回归测试与上游安全公告。
-[OUTPUT]: 数据读写、外部连接、操作授权、验证范围与已确认依赖风险的当前安全契约。
+[INPUT]: Linux/Windows 原生边界、共用清理/浏览器/CLI 实现、依赖锁文件、独立网络 Skill、回归测试与上游安全公告。
+[OUTPUT]: 数据读写、外部连接、操作授权、验证范围、已修复依赖公告与仍待处理风险的当前安全契约。
 [POS]: 原生模块的安全地图；与 src/CLAUDE.md 的事务边界共同维护。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -51,9 +51,15 @@ Windows Skill 私密文件采用用户 SID 独占且保护的 NTFS ACL，写入�
 
 ### 已确认的上游依赖风险
 
+本轮独立依赖修复将生产 TLS 链锁定到 `rustls 0.23.46`、`rustls-webpki 0.103.16`、`webpki-root-certs 1.0.10`，对应 RustSec [0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html)、[0347](https://rustsec.org/advisories/RUSTSEC-2026-0347.html)、[0348](https://rustsec.org/advisories/RUSTSEC-2026-0348.html)、[0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html)、[0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)、[0383](https://rustsec.org/advisories/RUSTSEC-2026-0383.html)。`reqwest` 和 updater 的锁定依赖树均经过检查。前端开发依赖 Vite 更新到 `7.3.7`，修复 launch-editor 公告 [GHSA-587h-7wmj-h5pm](https://github.com/advisories/ghsa-587h-7wmj-h5pm)。
+
+Rust 与 npm 的 Tauri updater 包同步到 `2.14.0`。上游此版本在安装前再次验证待安装字节和签名版本；当前应用调用 `update.install()`。但 Windows 更新仍通过 updater 的 `zip 4.6.1` `ZipArchive::extract()` 路径解压，而 RustSec [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html)、[0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html)、[0369](https://rustsec.org/advisories/RUSTSEC-2026-0369.html) 的修复版要求 `zip >=9.0.0`。updater `2.14.0` 仍声明 `zip = "4"`，强制覆盖跨主版本既不兼容也不能证明安全；因此 zip 风险仍开放，须等待兼容的上游版本/修复并补 Windows 解压回归。当前签名校验降低了任意未签名归档进入解压器的可达性，但不覆盖签名密钥失陷或可信发布端签发恶意内容的风险。
+
 Linux 的既有 Tauri/Wry/GTK 依赖链仍包含 `glib 0.18.5`，命中 [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)：`VariantStrIter` 的迭代实现存在内存安全问题，官方修复版本为 `>=0.20.0`。本次静态检索应用与锁定依赖源码，未发现 `Variant::array_iter_str` / `VariantStrIter` 的应用调用路径；这不构成不可利用的证明。当前框架要求 `glib ^0.18`，单独增加新版本不能修复旧链。本轮没有隐藏或忽略该公告，也没有引入未经 Linux 优化构建验证的私有补丁；后续需兼容的框架升级或经审查的可追溯回补。
 
 同一既有 GTK 构建链的 `proc-macro-error 1.0.4` 命中 [RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html) 的停止维护提示；这是构建期维护风险，不应冒充已确认的运行时漏洞或恶意代码。依赖扫描无新增公告不等于整库没有风险，功能测试通过也不替代安全审查。
+
+本轮全目标 `Cargo.lock` 扫描还标记 `zbus_names 4.3.4`、`zvariant 5.15.0` 与 `zvariant_derive 5.15.0` 为停止维护（[RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)、[RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)、[RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)）。Linux 目标依赖树显示它们由 `tauri-plugin-single-instance 2.5.2` 引入。它们是维护状态公告，不是已确认漏洞；公告建议迁移到 `zbus 6.0.0` 合并后的模块，目前没有标注修复版本。将它们留待兼容的 Tauri/D-Bus 依赖迁移时处理。
 
 ## 本地身份保险库
 
