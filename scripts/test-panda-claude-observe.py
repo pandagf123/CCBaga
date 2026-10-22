@@ -10,6 +10,8 @@ import base64
 import hashlib
 import json
 import os
+import pwd
+import sys
 import plistlib
 import stat
 import subprocess
@@ -41,10 +43,11 @@ class ProbeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.key = self.root / "id_ed25519"
+        self.key = self.root / m.SV_KEY_RELATIVE
+        self.key.parent.mkdir(parents=True)
         self.key.write_text("fixture only", encoding="utf-8")
         self.key.chmod(0o600)
-        self.known_hosts = self.root / "known_hosts"
+        self.known_hosts = self.root / ".ssh" / "known_hosts"
         self.known_hosts.write_text("# fixture only\n", encoding="utf-8")
         self.known_hosts.chmod(0o600)
         self.host_key = base64.b64encode(b"synthetic ED25519 known_hosts fixture").decode()
@@ -59,15 +62,16 @@ class ProbeTests(unittest.TestCase):
 
     def remote_status(self, host=None, identity=None, executor=None, lookup=None,
                       **options):
-        return m.remote_status(
-            m.SV_HOST if host is None else host,
-            self.key if identity is None else identity,
-            executor=self.fake_exec if executor is None else executor,
-            known_hosts=self.known_hosts,
-            lookup=self.fake_lookup if lookup is None else lookup,
-            expected_identity=self.key,
-            expected_host_fingerprint=self.expected_fingerprint,
-            **options)
+        with patch.object(m, "trusted_account_home", return_value=self.root):
+            return m.remote_status(
+                m.SV_HOST if host is None else host,
+                self.key if identity is None else identity,
+                executor=self.fake_exec if executor is None else executor,
+                known_hosts=self.known_hosts,
+                lookup=self.fake_lookup if lookup is None else lookup,
+                expected_identity=self.key,
+                expected_host_fingerprint=self.expected_fingerprint,
+                **options)
 
     def fake_exec(self, argv, **kwargs):
         self.executed_args = argv
@@ -352,6 +356,99 @@ class ProbeTests(unittest.TestCase):
         state, data = m._read_bundle_plist(parent, "CCBaga-A.app")
         self.assertEqual(state, "PRESENT")
         self.assertEqual(data["CFBundleIdentifier"], "ai.local.requirement-french")
+
+
+
+    def test_embedded_sv_probe_executes_real_offline_fixture(self):
+        """Actually execute SV_PROBE locally, using only a fabricated Claude stub.
+
+        This detects missing imports/runtime errors hidden by mocked SSH tests.
+        No real /home/ubuntu paths or credentials, network or Anthropic binary.
+        """
+        base = self.root / "ubuntu"
+        ver = base / ".local" / "share" / "claude" / "versions"
+        binary = ver / "2.1.304"
+        ver.mkdir(parents=True)
+        launcher = base / ".local" / "bin" / "claude"
+        launcher.parent.mkdir(parents=True)
+        binary.write_text(
+            "#!/usr/bin/python3\nimport sys\n"
+            "if '--version' in sys.argv: print('2.1.304')\n"
+            "else: print('not logged in')\n", encoding="utf-8"
+        )
+        binary.chmod(0o700)
+        launcher.symlink_to("../share/claude/versions/2.1.304")
+        # Replace only fixed fixture paths and known fake owner constants in
+        # an isolated *local* copy of the embedded probe program.
+        probe = m.SV_PROBE.replace("/home/ubuntu", str(base))
+        probe = probe.replace("1000", str(os.getuid()))
+        probe = probe.replace('"ubuntu"', json.dumps(pwd.getpwuid(os.getuid()).pw_name))
+        result = subprocess.run([sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=10, check=False,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+        self.assertEqual(result.returncode, 0, "embedded SV fixture returned nonzero")
+        self.assertNotIn("Traceback", result.stderr)
+        record = json.loads(result.stdout)
+        self.assertEqual(record["cli"], "PRESENT")
+        self.assertEqual(record["version"], "2.1.304")
+        self.assertEqual(record["auth"], "NOT_SIGNED_IN")
+
+    def test_remote_status_rejects_malformed_field_types(self):
+        for field in ("cli", "auth"):
+            for corrupted in ([], {}, {"token": "secret"}, 5, None, False):
+                with self.subTest(field=field, data_type=type(corrupted).__name__):
+                    payload = dict(BASE_RESULT, **{field: corrupted})
+                    with self.assertRaises(ValueError):
+                        m.safe_remote_result(json.dumps(payload))
+
+    def test_remote_status_rejects_unhashable_without_raw_traceback(self):
+        def corrupted(argv, **kwargs):
+            return SimpleNamespace(returncode=0,
+                stdout=json.dumps(dict(BASE_RESULT, auth=["not logged in"])),
+                stderr="authentication token sensitive")
+        with self.assertRaisesRegex(ValueError, "^REMOTE_STATUS_UNVERIFIABLE$"):
+            self.remote_status(executor=corrupted)
+
+    def test_environment_HOME_override_does_not_change_account_home(self):
+        observed = m.trusted_account_home()
+        with patch.dict(os.environ, {"HOME": str(self.root / "attacker")}):
+            self.assertEqual(m.trusted_account_home(), observed)
+
+    def test_symlinked_key_parent_is_denied(self):
+        other = self.root / "outside"
+        other.mkdir()
+        key_name = self.key.name
+        (other / key_name).write_text("fixture only", encoding="utf-8")
+        (other / key_name).chmod(0o600)
+        self.key.unlink()
+        self.key.parent.rmdir()
+        self.key.parent.symlink_to(other, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "SSH_IDENTITY_ANCESTRY_UNTRUSTED"):
+            self.remote_status()
+
+    def test_symlinked_ssh_parent_is_denied(self):
+        other = self.root / "outside"
+        other.mkdir()
+        ssh_dir = self.root / ".ssh"
+        self.key.unlink()
+        self.key.parent.rmdir()
+        self.known_hosts.unlink()
+        ssh_dir.rmdir()
+        (other / "known_hosts").write_text("# fake", encoding="utf-8")
+        ssh_dir.symlink_to(other, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "SSH_IDENTITY_ANCESTRY_UNTRUSTED"):
+            self.remote_status()
+
+    def test_symlinked_known_hosts_parent_is_denied_independently(self):
+        alternate = self.root / "elsewhere"
+        alternate.mkdir()
+        (alternate / "known_hosts").write_text("# fake", encoding="utf-8")
+        self.known_hosts.unlink()
+        # Key directory remains real and safe; only known_hosts leaf may be
+        # replaced in this test, covered by symlink file test elsewhere.
+        self.known_hosts.symlink_to(alternate / "known_hosts")
+        with self.assertRaisesRegex(ValueError, "KNOWN_HOSTS_SYMLINK_DENIED"):
+            self.remote_status()
 
 
 
