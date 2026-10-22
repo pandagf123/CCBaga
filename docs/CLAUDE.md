@@ -10,4 +10,5 @@ identity-storage.md: 默认联动/保留关闭与顶部绑定身份卡的显示�
 usage.md: 英文用途声明、操作速查、CLI/删除边界与账号说明；区分仅清缓存和确认后全清当前浏览器资料，密码/书签/偏好均在全清范围，不写死版本或统计。
 panda-ccbaga-sv-observe.md: CCBaga 本机 GUI 是否已安装的只读检查、SV 官方 Claude Code 只读状态适配器试点及安全/认证/独立复审边界；非 GUI 集成或远端生产部署。
 panda-ccbaga-sv-observe.md 补记最新独立 CHANGES_REQUIRED 回应、固定工具路径与 no-follow FD、拒绝将无权限目录当不存在，强调 CI≠独立复审与实机许可。
+panda-ccbaga-sv-observe.md 记录 b979565 独立双轴 CHANGES_REQUIRED、remote stat/HOME 锚定/JSON 类型三项最小整改及合成探针实际执行验证范围，独立验收仍 HOLD。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
