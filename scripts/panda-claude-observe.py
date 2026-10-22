@@ -187,7 +187,7 @@ def _read_bundle_plist(parent: Path, bundle_name: str) -> tuple[str, dict | None
 
 def local_inventory(home: Path = None, system_app_dir: Path = None) -> dict:
     """Descriptor-based standard-location checks; errors never mean proven absence."""
-    home = home or Path.home()
+    home = home if home is not None else trusted_account_home()
     system_app_dir = system_app_dir or Path("/Applications")
     applications = {}
     for bundle, expected_id in APP_IDS.items():
@@ -346,12 +346,11 @@ def safe_remote_result(payload: str) -> dict:
 
 def remote_status(host: str, identity: Path, executor=subprocess.run,
                   known_hosts: Path = None, lookup=subprocess.run,
-                  expected_identity: Path = None,
                   expected_host_fingerprint: str = SV_ED25519_HOST_FINGERPRINT) -> dict:
     if host != SV_HOST:
         raise ValueError("HOST_NOT_ALLOWED")
     home = trusted_account_home()
-    expected_identity = expected_identity or (home / SV_KEY_RELATIVE)
+    expected_identity = home / SV_KEY_RELATIVE
     if identity.is_symlink():
         raise ValueError("SSH_IDENTITY_SYMLINK_DENIED")
     if identity.absolute() != expected_identity.absolute():
