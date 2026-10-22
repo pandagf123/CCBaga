@@ -120,6 +120,8 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("email", json.dumps(out))
         self.assertNotIn("token", json.dumps(out))
         self.assertNotIn("account_id", json.dumps(out))
+        self.assertFalse(out["credential_values_transmitted"])
+        self.assertFalse(out["eligibility_verified"])
 
     def test_invented_auth_status_rejected(self):
         rec = dict(BASE_RESULT, auth="ELIGIBLE_AND_SUBSCRIBED")
