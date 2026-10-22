@@ -69,7 +69,6 @@ class ProbeTests(unittest.TestCase):
                 executor=self.fake_exec if executor is None else executor,
                 known_hosts=self.known_hosts,
                 lookup=self.fake_lookup if lookup is None else lookup,
-                expected_identity=self.key,
                 expected_host_fingerprint=self.expected_fingerprint,
                 **options)
 
