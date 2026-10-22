@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
+import contextlib
 import json
 import os
 import plistlib
@@ -31,6 +33,30 @@ APP_IDS = {
 SV_HOST = "43.135.166.3"  # Pinned current authorized SV instance, not caller selected.
 SV_ED25519_HOST_FINGERPRINT = "SHA256:5XKggGGuBQp2IFHpTAucXUYNQFgulagChJZuMIgxu0I"
 SV_KEY_RELATIVE = ".ssh/sv-ubuntu-admin/sv-ubuntu-admin-ed25519"
+# macOS SIP-protected, absolute OpenSSH binaries; caller PATH is not trusted.
+LOCAL_SSH = "/usr/bin/ssh"
+LOCAL_SSH_KEYGEN = "/usr/bin/ssh-keygen"
+REMOTE_PYTHON = "/usr/bin/python3"  # Ubuntu system interpreter, no remote PATH resolution.
+
+
+def validate_system_executable(path: str) -> str:
+    """Ensure a pinned system tool is a root-owned, executable regular file."""
+    if not path.startswith("/usr/bin/"):
+        raise ValueError("SYSTEM_TOOL_PATH_NOT_PINNED")
+    try:
+        st = os.lstat(path)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+            or st.st_mode & 0o022 or not st.st_mode & 0o111):
+            raise ValueError("SYSTEM_TOOL_NOT_TRUSTED")
+    except OSError:
+        raise ValueError("SYSTEM_TOOL_UNAVAILABLE") from None
+    return path
+
+
+def restricted_process_environment() -> dict[str, str]:
+    """Refuse caller PATH, PYTHONPATH, DYLD and other inherited executable hooks."""
+    return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "HOME": str(Path.home())}
+
 VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\b")
 
 # Deliberately independent of ~/.ssh/config aliases, proxy commands, remote
@@ -56,14 +82,24 @@ if os.getuid() != 1000 or pwd.getpwuid(os.getuid()).pw_name != "ubuntu":
     raise SystemExit(0)
 out["identity"] = "EXPECTED"
 cli = Path("/home/ubuntu/.local/bin/claude")
+# Reject redirecting the official version-root through a symlink; the
+# launcher symlink itself is normal, but only its canonical target executes.
+version_root = Path("/home/ubuntu/.local/share/claude/versions")
 try:
+    for parent in (Path("/home/ubuntu"), Path("/home/ubuntu/.local"),
+                   Path("/home/ubuntu/.local/share"),
+                   Path("/home/ubuntu/.local/share/claude"), version_root):
+        st = parent.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, 1000)
+                or st.st_mode & 0o022):
+            raise ValueError("UNTRUSTED_VERSION_DIRECTORY")
     resolved_cli = cli.resolve(strict=True)
-    expected_dir = Path("/home/ubuntu/.local/share/claude/versions").resolve(strict=True)
-    trusted_cli = (resolved_cli.parent == expected_dir
-                   and resolved_cli.is_file()
-                   and resolved_cli.stat().st_uid == 1000
-                   and resolved_cli.stat().st_mode & 0o022 == 0)
-except (OSError, RuntimeError):
+    exe_stat = resolved_cli.lstat()
+    trusted_cli = (resolved_cli.parent == version_root
+                   and stat.S_ISREG(exe_stat.st_mode)
+                   and exe_stat.st_uid == 1000
+                   and exe_stat.st_mode & 0o022 == 0)
+except (OSError, RuntimeError, ValueError):
     trusted_cli = False
 if not trusted_cli:
     out["cli"] = "NOT_FOUND_OR_UNTRUSTED"
@@ -80,7 +116,7 @@ def check(arguments):
     except (OSError, subprocess.TimeoutExpired):
         return None
 
-version_result = check([str(cli), "--version"])
+version_result = check([str(resolved_cli), "--version"])
 if version_result is not None and version_result.returncode == 0:
     match = re.search(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\b", version_result.stdout[:200])
     if match:
@@ -88,7 +124,7 @@ if version_result is not None and version_result.returncode == 0:
 
 # The official CLI may inspect its local credential store internally.
 # This observer emits only a bounded status enum, never CLI stdout/stderr.
-auth_result = check([str(cli), "auth", "status", "--text"])
+auth_result = check([str(resolved_cli), "auth", "status", "--text"])
 if auth_result is not None:
     result = (auth_result.stdout + "\n" + auth_result.stderr).lower()[:4096]
     if any(s in result for s in ("not logged in", "not signed in", "not authenticated", "logged out")):
@@ -104,44 +140,80 @@ print(json.dumps(out, sort_keys=True))
 '''
 
 
+def _read_bundle_plist(parent: Path, bundle_name: str) -> tuple[str, dict | None]:
+    """Inspect each path through O_NOFOLLOW directory descriptors, not path reopens."""
+    dirs = []
+    file_descriptor = None
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        parent_fd = os.open(parent, flags)
+        dirs.append(parent_fd)
+        try:
+            bundle_fd = os.open(bundle_name, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return ("ABSENT", None)
+        dirs.append(bundle_fd)
+        contents_fd = os.open("Contents", flags, dir_fd=bundle_fd)
+        dirs.append(contents_fd)
+        file_descriptor = os.open("Info.plist", os.O_RDONLY | os.O_NOFOLLOW |
+                                  os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=contents_fd)
+        info_stat = os.fstat(file_descriptor)
+        if not stat.S_ISREG(info_stat.st_mode) or info_stat.st_size > 1024 * 1024:
+            return ("UNREADABLE_METADATA", None)
+        with os.fdopen(os.dup(file_descriptor), "rb") as stream:
+            data = stream.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
+            return ("UNREADABLE_METADATA", None)
+        return ("PRESENT", plistlib.loads(data))
+    except FileNotFoundError:
+        # A missing standard parent is absent; a missing component inside an
+        # existing bundle is malformed/unreadable, not a proved valid app.
+        return ("ABSENT", None) if not dirs else ("UNREADABLE_METADATA", None)
+    except (PermissionError, IsADirectoryError):
+        return ("UNREADABLE_STANDARD_PATH", None)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.ENOTDIR):
+            return ("UNTRUSTED_PATH", None)
+        return ("UNREADABLE_STANDARD_PATH", None)
+    except (ValueError, TypeError, plistlib.InvalidFileException):
+        return ("UNREADABLE_METADATA", None)
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        for fd in reversed(dirs):
+            os.close(fd)
+
+
 def local_inventory(home: Path = None, system_app_dir: Path = None) -> dict:
-    """Check only standard locations, never scan credentials or start programs."""
+    """Observe only standard locations. Unknown ≠ absent. Never start an app."""
     home = home or Path.home()
     system_app_dir = system_app_dir or Path("/Applications")
     applications = {}
     for bundle, expected_id in APP_IDS.items():
         records = []
         for parent in (system_app_dir, home / "Applications"):
-            folder = parent / bundle
-            if not folder.exists() and not folder.is_symlink():
+            state, data = _read_bundle_plist(parent, bundle)
+            if state == "ABSENT":
                 continue
-            contents = folder / "Contents"
-            info = contents / "Info.plist"
-            try:
-                # Explicitly reject intermediate symlinks before reading plist.
-                if (folder.is_symlink() or not folder.is_dir()
-                    or contents.is_symlink() or not contents.is_dir()
-                    or info.is_symlink() or not info.is_file()):
-                    records.append({"location": str(folder), "state": "UNTRUSTED_PATH"})
-                    continue
-                if info.stat().st_size > 1024 * 1024:
-                    raise ValueError("Oversized bundle metadata")
-                data = plistlib.loads(info.read_bytes())
-                bundle_id = data.get("CFBundleIdentifier")
-                version = data.get("CFBundleShortVersionString")
+            folder = parent / bundle
+            if state == "PRESENT":
+                bundle_id = data.get("CFBundleIdentifier") if isinstance(data, dict) else None
+                version = data.get("CFBundleShortVersionString") if isinstance(data, dict) else None
                 matching = bundle_id == expected_id
-                record = {"location": str(folder),
-                          "state": "FOUND_BUNDLE_ID_MATCH" if matching else "BUNDLE_ID_MISMATCH"}
+                state = "FOUND_BUNDLE_ID_MATCH" if matching else "BUNDLE_ID_MISMATCH"
+                record = {"location": str(folder), "state": state}
                 if matching and isinstance(version, str) and VERSION_PATTERN.fullmatch(version):
                     record["version"] = version
-                records.append(record)
-            except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
-                records.append({"location": str(folder), "state": "UNREADABLE_METADATA"})
-        applications[bundle] = {
-            "state": "FOUND" if any(r["state"] == "FOUND_BUNDLE_ID_MATCH" for r in records)
-                     else ("NOT_IN_STANDARD_LOCATIONS" if not records else "NEEDS_REVIEW"),
-            "locations": records,
-        }
+            else:
+                record = {"location": str(folder), "state": state}
+            records.append(record)
+        if any(r["state"] == "FOUND_BUNDLE_ID_MATCH" for r in records):
+            total_state = "FOUND"
+        elif not records:
+            total_state = "NOT_IN_STANDARD_LOCATIONS"
+        else:
+            total_state = "NEEDS_REVIEW"
+        applications[bundle] = {"state": total_state, "locations": records}
     return {"schema": SCHEMA, "scope": "MAC_STANDARD_APP_LOCATIONS_ONLY",
             "applications": applications, "signed_or_running": "NOT_CHECKED"}
 
@@ -170,8 +242,9 @@ def check_known_host(known_hosts: Path, lookup=subprocess.run,
         raise ValueError("KNOWN_HOSTS_UNTRUSTED")
     safe_path = known_hosts.resolve(strict=True)
     try:
-        r = lookup(["ssh-keygen", "-F", SV_HOST, "-f", str(safe_path)],
-                   capture_output=True, text=True, timeout=6, check=False)
+        r = lookup([validate_system_executable(LOCAL_SSH_KEYGEN), "-F", SV_HOST, "-f", str(safe_path)],
+                   capture_output=True, text=True, timeout=6, check=False,
+                   env=restricted_process_environment())
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError("KNOWN_HOSTS_LOOKUP_FAILED") from None
     if r.returncode != 0:
@@ -235,7 +308,7 @@ def remote_status(host: str, identity: Path, executor=subprocess.run,
                           lookup=lookup, expected_fingerprint=expected_host_fingerprint)
     # -F /dev/null prevents silently consuming ~/.ssh/config. Host and identity
     # are explicit and pinned, as is the server's expected ED25519 host key.
-    argv = ["ssh", "-F", "/dev/null", "-T",
+    argv = [validate_system_executable(LOCAL_SSH), "-F", "/dev/null", "-T",
             "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", f"UserKnownHostsFile={kh}", "-o", "GlobalKnownHostsFile=/dev/null",
             "-o", "HostKeyAlgorithms=ssh-ed25519",
@@ -247,10 +320,10 @@ def remote_status(host: str, identity: Path, executor=subprocess.run,
             "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
             "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
             "-o", "ConnectTimeout=7", "-o", "ConnectionAttempts=1",
-            "-i", str(key), "-l", "ubuntu", "--", SV_HOST, "python3 -"]
+            "-i", str(key), "-l", "ubuntu", "--", SV_HOST, REMOTE_PYTHON + " -"]
     try:
         result = executor(argv, input=SV_PROBE, capture_output=True, text=True,
-                          timeout=40, check=False)
+                          timeout=40, check=False, env=restricted_process_environment())
     except subprocess.TimeoutExpired:
         raise ValueError("SSH_TIMEOUT") from None
     except OSError:
