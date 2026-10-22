@@ -49,4 +49,5 @@ test-browser-cleanup.ts: 复用身份测试入口的 browser 模式，验证无�
 test-browser-profiles.ts: 固定引擎的真实持久资料隔离回归；虚构 Cookie/LocalStorage 的 A/B 隔离、重开恢复和空资料，仅临时 HOME/本机页面。
 panda-claude-observe.py: Mac Studio CCBaga-A/B 标准 Applications 路径本机只读盘点；显式参数后以既有严格 SSH 进行固定 Ubuntu UID1000 Claude Code 状态查询，输出白名单不含 OAuth/token，不安装、不登录、不调用模型，真实 SV 需另审。
 test-panda-claude-observe.py: 离线临时目录与模拟 SSH，校验包标识、错误 host/UID、权限不安全密钥、令牌输出阻断、timeout、命令参数与 fail-closed，无真实网络。
+panda-claude-observe.py 的远端检查目标、用户私钥路径与 known_hosts ED25519 指纹均固定绑定；SSH -F /dev/null 禁用用户配置、代理/跳板/Agent/转发；真实 --sv 在独立复审前 HOLD，禁止上传任何凭据。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
