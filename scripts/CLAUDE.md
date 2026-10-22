@@ -51,4 +51,6 @@ panda-claude-observe.py: Mac Studio CCBaga-A/B 标准 Applications 路径本机�
 test-panda-claude-observe.py: 离线临时目录与模拟 SSH，校验包标识、错误 host/UID、权限不安全密钥、令牌输出阻断、timeout、命令参数与 fail-closed，无真实网络。
 panda-claude-observe.py 的远端检查目标、用户私钥路径与 known_hosts ED25519 指纹均固定绑定；SSH -F /dev/null 禁用用户配置、代理/跳板/Agent/转发；真实 --sv 在独立复审前 HOLD，禁止上传任何凭据。
 panda-claude-observe.py 复审最小修复：OpenSSH macOS 绝对路径并验证所有者/权限、限制子进程环境；SV /usr/bin/python3 与已检查的 canonical CLI；应用包通过无符号链接目录 FD 和 fstat 读取，权限拒绝返回 NEEDS_REVIEW；真实端到端依然 HOLD。
+panda-claude-observe.py 最新独立复审 P1/P2 回应：嵌入式 SV_PROBE 显式 import stat；以 pwd 账户 home 校验 SSH identity/known_hosts 各级无 symlink 路径，忽略环境 HOME；cli/auth 强制字符串类型，畸形输入 HOLD。
+test-panda-claude-observe.py 通过本机合成 Claude stub 实际执行嵌入式 Python 探针，补充恶意 HOME、父目录 symlink、JSON 非字符串状态的负向断言。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
