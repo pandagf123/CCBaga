@@ -1,0 +1,52 @@
+# [INPUT]: Pinned feature-head Python observer and synthetic fixture regressions.
+# [OUTPUT]: Exact-head offline test receipt; no SSH credentials, paid models or artifact publishing.
+# [POS]: CCBaga P2 status observer dedicated non-network CI workflow.
+# [PROTOCOL]: Maintain .github/workflows/CLAUDE.md map and source/test synchronization.
+# Isolated CCBaga macOS bundle + SV Claude status adapter tests.
+# No SSH credentials, server connection, browser, Claude model, or installation.
+name: CCBaga SV observation offline
+on:
+  push:
+    branches:
+      - feat/ccbaga-sv-readonly-inventory-20261022
+    paths:
+      - "scripts/panda-claude-observe.py"
+      - "scripts/test-panda-claude-observe.py"
+      - ".github/workflows/panda-claude-observation.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/panda-claude-observe.py"
+      - "scripts/test-panda-claude-observe.py"
+      - ".github/workflows/panda-claude-observation.yml"
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pinned v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # pinned v6
+        with:
+          python-version: '3.13'
+      - name: Compile without writing bytecode
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for path in ['scripts/panda-claude-observe.py', 'scripts/test-panda-claude-observe.py']:
+              compile(Path(path).read_text(), path, 'exec')
+          PY
+      - name: Offline regression
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/test-panda-claude-observe.py -v

@@ -47,4 +47,10 @@ package-linux-browser.py: 旧目录移动与新目录提交共处取消/回滚�
 test-package-linux-browser.py: 四种目录移动取消恢复及取消后恢复失败保留备份；真实打包入口的首次/重建、版本/执行权限前置检查、复制/提交回滚及双重失败备份保留回归；临时样本不安装引擎，非 Linux 仅替换 uname 选择 Linux 分支。
 test-browser-cleanup.ts: 复用身份测试入口的 browser 模式，验证无缓存全清理、默认取消/强制勾选、精确删除参数、任务锁/真实 Channel 进度、失败与双语；仅内存 IPC，无原生或真实用户资料。
 test-browser-profiles.ts: 固定引擎的真实持久资料隔离回归；虚构 Cookie/LocalStorage 的 A/B 隔离、重开恢复和空资料，仅临时 HOME/本机页面。
+panda-claude-observe.py: Mac Studio CCBaga-A/B 标准 Applications 路径本机只读盘点；显式参数后以既有严格 SSH 进行固定 Ubuntu UID1000 Claude Code 状态查询，输出白名单不含 OAuth/token，不安装、不登录、不调用模型，真实 SV 需另审。
+test-panda-claude-observe.py: 离线临时目录与模拟 SSH，校验包标识、错误 host/UID、权限不安全密钥、令牌输出阻断、timeout、命令参数与 fail-closed，无真实网络。
+panda-claude-observe.py 的远端检查目标、用户私钥路径与 known_hosts ED25519 指纹均固定绑定；SSH -F /dev/null 禁用用户配置、代理/跳板/Agent/转发；真实 --sv 在独立复审前 HOLD，禁止上传任何凭据。
+panda-claude-observe.py 复审最小修复：OpenSSH macOS 绝对路径并验证所有者/权限、限制子进程环境；SV /usr/bin/python3 与已检查的 canonical CLI；应用包通过无符号链接目录 FD 和 fstat 读取，权限拒绝返回 NEEDS_REVIEW；真实端到端依然 HOLD。
+panda-claude-observe.py 最新独立复审 P1/P2 回应：嵌入式 SV_PROBE 显式 import stat；以 pwd 账户 home 校验 SSH identity/known_hosts 各级无 symlink 路径，忽略环境 HOME；cli/auth 强制字符串类型，畸形输入 HOLD。
+test-panda-claude-observe.py 通过本机合成 Claude stub 实际执行嵌入式 Python 探针，补充恶意 HOME、父目录 symlink、JSON 非字符串状态的负向断言。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
