@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# [INPUT]: Existing local CCBaga app bundles and (only when explicitly opted in) a pinned SV SSH identity/known_hosts.
+# [OUTPUT]: Allowlists of local bundle metadata or sanitized remote Claude CLI state; no account secrets.
+# [POS]: Non-GUI, non-installing P2 observation pilot for CCBaga Issue #2; host source verification remains external.
+# [PROTOCOL]: Keep docs, negative tests and .github/workflows file map updated on boundary changes.
 """CCBaga pilot: read-only local app inventory and opt-in SV Claude status.
 
 The default action only checks known macOS app-bundle locations. The separate
@@ -9,13 +13,14 @@ Not a production CCBaga GUI integration or account eligibility check.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import plistlib
 import re
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 SCHEMA = "panda.ccbaga.claude-observation.v1"
@@ -23,7 +28,9 @@ APP_IDS = {
     "CCBaga-A.app": "ai.local.requirement-french",
     "CCBaga-B.app": "ai.local.requirement-french.browser",
 }
-HOST_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z")
+SV_HOST = "43.135.166.3"  # Pinned current authorized SV instance, not caller selected.
+SV_ED25519_HOST_FINGERPRINT = "SHA256:5XKggGGuBQp2IFHpTAucXUYNQFgulagChJZuMIgxu0I"
+SV_KEY_RELATIVE = ".ssh/sv-ubuntu-admin/sv-ubuntu-admin-ed25519"
 VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\b")
 
 # Deliberately independent of ~/.ssh/config aliases, proxy commands, remote
@@ -49,8 +56,17 @@ if os.getuid() != 1000 or pwd.getpwuid(os.getuid()).pw_name != "ubuntu":
     raise SystemExit(0)
 out["identity"] = "EXPECTED"
 cli = Path("/home/ubuntu/.local/bin/claude")
-if not cli.is_file():
-    out["cli"] = "NOT_FOUND_AT_EXPECTED_PATH"
+try:
+    resolved_cli = cli.resolve(strict=True)
+    expected_dir = Path("/home/ubuntu/.local/share/claude/versions").resolve(strict=True)
+    trusted_cli = (resolved_cli.parent == expected_dir
+                   and resolved_cli.is_file()
+                   and resolved_cli.stat().st_uid == 1000
+                   and resolved_cli.stat().st_mode & 0o022 == 0)
+except (OSError, RuntimeError):
+    trusted_cli = False
+if not trusted_cli:
+    out["cli"] = "NOT_FOUND_OR_UNTRUSTED"
     print(json.dumps(out, sort_keys=True))
     raise SystemExit(0)
 out["cli"] = "PRESENT"
@@ -97,13 +113,17 @@ def local_inventory(home: Path = None, system_app_dir: Path = None) -> dict:
             folder = parent / bundle
             if not folder.exists() and not folder.is_symlink():
                 continue
-            if folder.is_symlink() or not folder.is_dir():
-                records.append({"location": str(folder), "state": "UNTRUSTED_PATH"})
-                continue
-            info = folder / "Contents" / "Info.plist"
+            contents = folder / "Contents"
+            info = contents / "Info.plist"
             try:
-                if info.is_symlink() or not info.is_file():
-                    raise ValueError("Info.plist not regular")
+                # Explicitly reject intermediate symlinks before reading plist.
+                if (folder.is_symlink() or not folder.is_dir()
+                    or contents.is_symlink() or not contents.is_dir()
+                    or info.is_symlink() or not info.is_file()):
+                    records.append({"location": str(folder), "state": "UNTRUSTED_PATH"})
+                    continue
+                if info.stat().st_size > 1024 * 1024:
+                    raise ValueError("Oversized bundle metadata")
                 data = plistlib.loads(info.read_bytes())
                 bundle_id = data.get("CFBundleIdentifier")
                 version = data.get("CFBundleShortVersionString")
@@ -134,6 +154,47 @@ def check_identity_key(path: Path) -> Path:
     return path.resolve()
 
 
+
+def check_known_host(known_hosts: Path, lookup=subprocess.run,
+                     expected_fingerprint: str = SV_ED25519_HOST_FINGERPRINT) -> Path:
+    """Match fixed IP to an independently pinned ED25519 key from existing known_hosts.
+
+    ssh-keygen -F supports hashed known_hosts entries; it does not contact SV.
+    """
+    if known_hosts.is_symlink():
+        raise ValueError("KNOWN_HOSTS_SYMLINK_DENIED")
+    st = known_hosts.stat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+        raise ValueError("KNOWN_HOSTS_UNTRUSTED")
+    safe_path = known_hosts.resolve(strict=True)
+    try:
+        r = lookup(["ssh-keygen", "-F", SV_HOST, "-f", str(safe_path)],
+                   capture_output=True, text=True, timeout=6, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("KNOWN_HOSTS_LOOKUP_FAILED") from None
+    if r.returncode != 0:
+        raise ValueError("SV_HOST_KEY_NOT_FOUND")
+    fingerprints = []
+    for line in r.stdout.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) < 3 or fields[1] != "ssh-ed25519":
+            continue
+        try:
+            raw_key = base64.b64decode(fields[2], validate=True)
+        except (ValueError, Exception) as error:
+            raise ValueError("KNOWN_HOST_KEY_INVALID") from None
+        if not raw_key:
+            raise ValueError("KNOWN_HOST_KEY_INVALID")
+        digest = base64.b64encode(hashlib.sha256(raw_key).digest()).decode("ascii").rstrip("=")
+        fingerprints.append("SHA256:" + digest)
+    if not fingerprints or any(f != expected_fingerprint for f in fingerprints):
+        raise ValueError("SV_HOST_KEY_PIN_MISMATCH")
+    return safe_path
+
+
+
 def safe_remote_result(payload: str) -> dict:
     # Parse a single bounded record; never echo raw remote output or ssh stderr.
     if len(payload) > 4096:
@@ -144,7 +205,7 @@ def safe_remote_result(payload: str) -> dict:
     uid = value.get("uid")
     if type(uid) is not int or uid != 1000 or value.get("identity") != "EXPECTED":
         raise ValueError("SV_USER_IDENTITY_MISMATCH")
-    if value.get("cli") not in {"PRESENT", "NOT_FOUND_AT_EXPECTED_PATH", "UNKNOWN"}:
+    if value.get("cli") not in {"PRESENT", "NOT_FOUND_OR_UNTRUSTED", "UNKNOWN"}:
         raise ValueError("SV_CLI_STATE_INVALID")
     if value.get("auth") not in {"UNKNOWN", "SIGNED_IN", "NOT_SIGNED_IN", "NOT_SIGNED_IN_OR_ERROR"}:
         raise ValueError("SV_AUTH_STATE_INVALID")
@@ -158,17 +219,33 @@ def safe_remote_result(payload: str) -> dict:
             "credential_values_read": False, "eligibility_verified": False}
 
 
-def remote_status(host: str, identity: Path, executor=subprocess.run) -> dict:
-    if not HOST_PATTERN.fullmatch(host) or ".." in host or host.endswith("."):
+def remote_status(host: str, identity: Path, executor=subprocess.run,
+                  known_hosts: Path = None, lookup=subprocess.run,
+                  expected_identity: Path = None,
+                  expected_host_fingerprint: str = SV_ED25519_HOST_FINGERPRINT) -> dict:
+    if host != SV_HOST:
         raise ValueError("HOST_NOT_ALLOWED")
+    expected_identity = expected_identity or (Path.home() / SV_KEY_RELATIVE)
+    if identity.absolute() != expected_identity.absolute():
+        raise ValueError("SSH_IDENTITY_PATH_MISMATCH")
     key = check_identity_key(identity)
-    argv = ["ssh", "-T", "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",
-            "-o", "IdentitiesOnly=yes", "-o", "ForwardAgent=no",
-            "-o", "ClearAllForwardings=yes", "-o", "RequestTTY=no",
+    kh = check_known_host(known_hosts or (Path.home() / ".ssh" / "known_hosts"),
+                          lookup=lookup, expected_fingerprint=expected_host_fingerprint)
+    # -F /dev/null prevents silently consuming ~/.ssh/config. Host and identity
+    # are explicit and pinned, as is the server's expected ED25519 host key.
+    argv = ["ssh", "-F", "/dev/null", "-T",
+            "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+            "-o", f"UserKnownHostsFile={kh}", "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "HostKeyAlgorithms=ssh-ed25519",
+            "-o", "VerifyHostKeyDNS=no", "-o", "UpdateHostKeys=no",
+            "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+            "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
+            "-o", "RequestTTY=no", "-o", "ControlMaster=no",
+            "-o", "ControlPath=none", "-o", "CanonicalizeHostname=no",
             "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
             "-o", "ConnectTimeout=7", "-o", "ConnectionAttempts=1",
-            "-i", str(key), "-l", "ubuntu", "--", host, "python3 -"]
+            "-i", str(key), "-l", "ubuntu", "--", SV_HOST, "python3 -"]
     try:
         result = executor(argv, input=SV_PROBE, capture_output=True, text=True,
                           timeout=40, check=False)
@@ -187,15 +264,9 @@ def remote_status(host: str, identity: Path, executor=subprocess.run) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sv", action="store_true", help="Opt in to fixed SV read-only SSH probe")
-    parser.add_argument("--host", help="Previously verified SV hostname or IPv4")
-    parser.add_argument("--identity-file", type=Path, help="Existing local SSH private-key path")
     args = parser.parse_args(argv)
-    if not args.sv and (args.host or args.identity_file):
-        parser.error("--host/--identity-file are only valid with --sv")
-    if args.sv and (not args.host or not args.identity_file):
-        parser.error("--sv requires --host and --identity-file")
     try:
-        result = remote_status(args.host, args.identity_file) if args.sv else local_inventory()
+        result = remote_status(SV_HOST, Path.home() / SV_KEY_RELATIVE) if args.sv else local_inventory()
     except (ValueError, OSError):
         # No raw exception messages; they may contain system paths or ssh details.
         print(json.dumps({"schema": SCHEMA, "status": "HOLD_UNVERIFIED"}, sort_keys=True))
