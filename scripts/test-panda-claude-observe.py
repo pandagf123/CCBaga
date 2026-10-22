@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -132,14 +133,14 @@ class ProbeTests(unittest.TestCase):
         out = self.remote_status(executor=self.fake_exec)
         self.assertEqual(out["version"], "2.1.304")
         argv = self.executed_args
-        self.assertEqual(argv[0], "ssh")
-        self.assertEqual(argv[-2:], [m.SV_HOST, "python3 -"])
+        self.assertEqual(argv[0], m.LOCAL_SSH)
+        self.assertEqual(argv[-2:], [m.SV_HOST, m.REMOTE_PYTHON + " -"])
         self.assertIn("-F", argv)
         self.assertIn("/dev/null", argv)
         self.assertIn("HostKeyAlgorithms=ssh-ed25519", argv)
         self.assertIn("IdentityAgent=none", argv)
         self.assertIn("UserKnownHostsFile=" + str(self.known_hosts), argv)
-        self.assertIn("ssh-keygen", self.lookup_args)
+        self.assertEqual(self.lookup_args[0], m.LOCAL_SSH_KEYGEN)
         self.assertIn("StrictHostKeyChecking=yes", argv)
         self.assertIn("BatchMode=yes", argv)
         self.assertIn("ProxyCommand=none", argv)
@@ -280,6 +281,77 @@ class ProbeTests(unittest.TestCase):
         (p / "Info.plist").write_bytes(b"x" * (1024 * 1024 + 1))
         out = m.local_inventory(home=self.root, system_app_dir=self.root / "system")
         self.assertEqual(out["applications"]["CCBaga-A.app"]["state"], "NEEDS_REVIEW")
+
+
+
+    def test_caller_path_cannot_select_ssh_or_ssh_keygen(self):
+        self.remote_status()
+        self.assertEqual(self.executed_args[0], "/usr/bin/ssh")
+        self.assertEqual(self.lookup_args[0], "/usr/bin/ssh-keygen")
+        self.assertEqual(self.executed_options["env"]["PATH"], "/usr/bin:/bin")
+        self.assertNotIn("PYTHONPATH", self.executed_options["env"])
+
+    def test_arbitrary_local_ssh_executable_is_rejected(self):
+        rogue = self.root / "ssh"
+        rogue.write_text("#!/bin/sh\n", encoding="utf-8")
+        rogue.chmod(0o755)
+        with patch.object(m, "LOCAL_SSH", str(rogue)):
+            with self.assertRaisesRegex(ValueError, "SYSTEM_TOOL_PATH_NOT_PINNED"):
+                self.remote_status()
+
+    def test_arbitrary_local_hostkey_executable_is_rejected(self):
+        rogue = self.root / "ssh-keygen"
+        rogue.write_text("#!/bin/sh\n", encoding="utf-8")
+        rogue.chmod(0o755)
+        with patch.object(m, "LOCAL_SSH_KEYGEN", str(rogue)):
+            with self.assertRaisesRegex(ValueError, "SYSTEM_TOOL_PATH_NOT_PINNED"):
+                self.remote_status()
+
+    def test_remote_interpreter_uses_absolute_system_path(self):
+        self.remote_status()
+        self.assertEqual(self.executed_args[-1], "/usr/bin/python3 -")
+        self.assertNotIn("python3 -", self.executed_args)
+        self.assertIn("resolved_cli", m.SV_PROBE)
+        self.assertIn("version_root", m.SV_PROBE)
+        self.assertIn("parent.lstat()", m.SV_PROBE)
+
+    def test_permission_error_is_unknown_not_absent(self):
+        with patch.object(m.os, "open", side_effect=PermissionError(13, "denied")):
+            result = m.local_inventory(home=self.root, system_app_dir=self.root / "system")
+        for bundle in ("CCBaga-A.app", "CCBaga-B.app"):
+            self.assertEqual(result["applications"][bundle]["state"], "NEEDS_REVIEW")
+            self.assertTrue(all(
+                r["state"] == "UNREADABLE_STANDARD_PATH"
+                for r in result["applications"][bundle]["locations"]
+            ))
+
+    def test_symlink_swap_after_path_lookup_cannot_be_followed(self):
+        # Directory lookup is now descriptor-relative with O_NOFOLLOW, so an
+        # intermediate symlink is always rejected by the kernel.
+        parent = self.root / "system"
+        original = parent / "CCBaga-A.app" / "Contents"
+        original.mkdir(parents=True)
+        other = self.root / "external"
+        other.mkdir()
+        (other / "Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": "ai.local.requirement-french"
+        }))
+        original.rmdir()
+        original.symlink_to(other, target_is_directory=True)
+        state, _ = m._read_bundle_plist(parent, "CCBaga-A.app")
+        self.assertEqual(state, "UNTRUSTED_PATH")
+
+    def test_file_descriptor_metadata_read_still_passes_without_path_reopen(self):
+        parent = self.root / "system"
+        info = parent / "CCBaga-A.app" / "Contents" / "Info.plist"
+        info.parent.mkdir(parents=True)
+        info.write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": "ai.local.requirement-french",
+            "CFBundleShortVersionString": "0.2.49"
+        }))
+        state, data = m._read_bundle_plist(parent, "CCBaga-A.app")
+        self.assertEqual(state, "PRESENT")
+        self.assertEqual(data["CFBundleIdentifier"], "ai.local.requirement-french")
 
 
 
