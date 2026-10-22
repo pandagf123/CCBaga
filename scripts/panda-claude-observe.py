@@ -183,7 +183,7 @@ def check_known_host(known_hosts: Path, lookup=subprocess.run,
             continue
         try:
             raw_key = base64.b64decode(fields[2], validate=True)
-        except (ValueError, Exception) as error:
+        except Exception:
             raise ValueError("KNOWN_HOST_KEY_INVALID") from None
         if not raw_key:
             raise ValueError("KNOWN_HOST_KEY_INVALID")
@@ -226,9 +226,9 @@ def remote_status(host: str, identity: Path, executor=subprocess.run,
     if host != SV_HOST:
         raise ValueError("HOST_NOT_ALLOWED")
     expected_identity = expected_identity or (Path.home() / SV_KEY_RELATIVE)
+    key = check_identity_key(identity)
     if identity.absolute() != expected_identity.absolute():
         raise ValueError("SSH_IDENTITY_PATH_MISMATCH")
-    key = check_identity_key(identity)
     kh = check_known_host(known_hosts or (Path.home() / ".ssh" / "known_hosts"),
                           lookup=lookup, expected_fingerprint=expected_host_fingerprint)
     # -F /dev/null prevents silently consuming ~/.ssh/config. Host and identity
