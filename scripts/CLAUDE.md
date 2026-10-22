@@ -50,4 +50,5 @@ test-browser-profiles.ts: 固定引擎的真实持久资料隔离回归；虚构
 panda-claude-observe.py: Mac Studio CCBaga-A/B 标准 Applications 路径本机只读盘点；显式参数后以既有严格 SSH 进行固定 Ubuntu UID1000 Claude Code 状态查询，输出白名单不含 OAuth/token，不安装、不登录、不调用模型，真实 SV 需另审。
 test-panda-claude-observe.py: 离线临时目录与模拟 SSH，校验包标识、错误 host/UID、权限不安全密钥、令牌输出阻断、timeout、命令参数与 fail-closed，无真实网络。
 panda-claude-observe.py 的远端检查目标、用户私钥路径与 known_hosts ED25519 指纹均固定绑定；SSH -F /dev/null 禁用用户配置、代理/跳板/Agent/转发；真实 --sv 在独立复审前 HOLD，禁止上传任何凭据。
+panda-claude-observe.py 复审最小修复：OpenSSH macOS 绝对路径并验证所有者/权限、限制子进程环境；SV /usr/bin/python3 与已检查的 canonical CLI；应用包通过无符号链接目录 FD 和 fstat 读取，权限拒绝返回 NEEDS_REVIEW；真实端到端依然 HOLD。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
