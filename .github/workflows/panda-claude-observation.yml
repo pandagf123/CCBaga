@@ -1,3 +1,7 @@
+# [INPUT]: Pinned feature-head Python observer and synthetic fixture regressions.
+# [OUTPUT]: Exact-head offline test receipt; no SSH credentials, paid models or artifact publishing.
+# [POS]: CCBaga P2 status observer dedicated non-network CI workflow.
+# [PROTOCOL]: Maintain .github/workflows/CLAUDE.md map and source/test synchronization.
 # Isolated CCBaga macOS bundle + SV Claude status adapter tests.
 # No SSH credentials, server connection, browser, Claude model, or installation.
 name: CCBaga SV observation offline
