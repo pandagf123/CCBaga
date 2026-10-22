@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import plistlib
+import pwd
 import re
 import stat
 import subprocess
@@ -54,7 +55,7 @@ def validate_system_executable(path: str) -> str:
 
 def restricted_process_environment() -> dict[str, str]:
     """Refuse caller PATH, PYTHONPATH, DYLD and other inherited executable hooks."""
-    return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "HOME": str(Path.home())}
+    return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "HOME": str(trusted_account_home())}
 
 VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\b")
 
@@ -65,6 +66,7 @@ import json
 import os
 import pwd
 import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -217,29 +219,78 @@ def local_inventory(home: Path = None, system_app_dir: Path = None) -> dict:
             "applications": applications, "signed_or_running": "NOT_CHECKED"}
 
 
-def check_identity_key(path: Path) -> Path:
-    """Refuse paths that could reference an untrusted/nonprivate SSH identity."""
-    if path.is_symlink():
-        raise ValueError("SSH_IDENTITY_SYMLINK_DENIED")
-    st = path.stat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
-        raise ValueError("SSH_IDENTITY_NOT_PRIVATE_OR_NOT_OWNED")
-    return path.resolve()
 
+def trusted_account_home() -> Path:
+    """Use the POSIX account record, never caller-controlled HOME."""
+    try:
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if not home.is_absolute() or ".." in home.parts:
+            raise ValueError("ACCOUNT_HOME_INVALID")
+        path = Path("/")
+        for name in home.parts[1:]:
+            path = path / name
+            st = os.lstat(path)
+            if (not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, os.getuid())
+                or (st.st_mode & 0o022 and not (
+                    st.st_uid == 0 and st.st_mode & stat.S_ISVTX
+                ))):
+                raise ValueError("ACCOUNT_HOME_ANCESTRY_UNTRUSTED")
+        if os.lstat(home).st_uid != os.getuid():
+            raise ValueError("ACCOUNT_HOME_OWNER_MISMATCH")
+    except (KeyError, OSError, RuntimeError):
+        raise ValueError("ACCOUNT_HOME_UNAVAILABLE") from None
+    return home
+
+
+def _trusted_sensitive_path(home: Path, relative: str, path: Path,
+                            marker: str) -> os.stat_result:
+    """Check every home-relative component by lstat, rejecting symlink ancestors."""
+    expected = home / relative
+    if path.is_symlink():
+        raise ValueError(marker + "_SYMLINK_DENIED")
+    if path.absolute() != expected:
+        raise ValueError(marker + "_PATH_MISMATCH")
+    current = home
+    for name in Path(relative).parts[:-1]:
+        current = current / name
+        try:
+            st = os.lstat(current)
+        except OSError:
+            raise ValueError(marker + "_ANCESTRY_UNVERIFIABLE") from None
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
+            or st.st_mode & 0o022):
+            raise ValueError(marker + "_ANCESTRY_UNTRUSTED")
+    try:
+        result = os.lstat(expected)
+    except OSError:
+        raise ValueError(marker + "_FILE_UNVERIFIABLE") from None
+    if not stat.S_ISREG(result.st_mode) or result.st_uid != os.getuid():
+        raise ValueError(marker + "_FILE_UNTRUSTED")
+    return result
+
+
+def check_identity_key(path: Path, home: Path = None) -> Path:
+    """Require owner-private file with symlink-free, pinned user-home ancestry."""
+    home = home if home is not None else trusted_account_home()
+    st = _trusted_sensitive_path(home, SV_KEY_RELATIVE, path, "SSH_IDENTITY")
+    if st.st_mode & 0o077:
+        raise ValueError("SSH_IDENTITY_NOT_PRIVATE_OR_NOT_OWNED")
+    return path
 
 
 def check_known_host(known_hosts: Path, lookup=subprocess.run,
-                     expected_fingerprint: str = SV_ED25519_HOST_FINGERPRINT) -> Path:
+                     expected_fingerprint: str = SV_ED25519_HOST_FINGERPRINT,
+                     home: Path = None) -> Path:
     """Match fixed IP to an independently pinned ED25519 key from existing known_hosts.
 
     ssh-keygen -F supports hashed known_hosts entries; it does not contact SV.
     """
-    if known_hosts.is_symlink():
-        raise ValueError("KNOWN_HOSTS_SYMLINK_DENIED")
-    st = known_hosts.stat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+    home = home if home is not None else trusted_account_home()
+    st = _trusted_sensitive_path(home, ".ssh/known_hosts", known_hosts, "KNOWN_HOSTS")
+    if st.st_mode & 0o022:
         raise ValueError("KNOWN_HOSTS_UNTRUSTED")
-    safe_path = known_hosts.resolve(strict=True)
+    safe_path = known_hosts
+
     try:
         r = lookup([validate_system_executable(LOCAL_SSH_KEYGEN), "-F", SV_HOST, "-f", str(safe_path)],
                    capture_output=True, text=True, timeout=6, check=False,
@@ -279,9 +330,9 @@ def safe_remote_result(payload: str) -> dict:
     uid = value.get("uid")
     if type(uid) is not int or uid != 1000 or value.get("identity") != "EXPECTED":
         raise ValueError("SV_USER_IDENTITY_MISMATCH")
-    if value.get("cli") not in {"PRESENT", "NOT_FOUND_OR_UNTRUSTED", "UNKNOWN"}:
+    if not isinstance(value.get("cli"), str) or value["cli"] not in {"PRESENT", "NOT_FOUND_OR_UNTRUSTED", "UNKNOWN"}:
         raise ValueError("SV_CLI_STATE_INVALID")
-    if value.get("auth") not in {"UNKNOWN", "SIGNED_IN", "NOT_SIGNED_IN", "NOT_SIGNED_IN_OR_ERROR"}:
+    if not isinstance(value.get("auth"), str) or value["auth"] not in {"UNKNOWN", "SIGNED_IN", "NOT_SIGNED_IN", "NOT_SIGNED_IN_OR_ERROR"}:
         raise ValueError("SV_AUTH_STATE_INVALID")
     version = value.get("version")
     if version is not None and (not isinstance(version, str) or
@@ -299,12 +350,16 @@ def remote_status(host: str, identity: Path, executor=subprocess.run,
                   expected_host_fingerprint: str = SV_ED25519_HOST_FINGERPRINT) -> dict:
     if host != SV_HOST:
         raise ValueError("HOST_NOT_ALLOWED")
-    expected_identity = expected_identity or (Path.home() / SV_KEY_RELATIVE)
-    key = check_identity_key(identity)
+    home = trusted_account_home()
+    expected_identity = expected_identity or (home / SV_KEY_RELATIVE)
+    if identity.is_symlink():
+        raise ValueError("SSH_IDENTITY_SYMLINK_DENIED")
     if identity.absolute() != expected_identity.absolute():
         raise ValueError("SSH_IDENTITY_PATH_MISMATCH")
-    kh = check_known_host(known_hosts or (Path.home() / ".ssh" / "known_hosts"),
-                          lookup=lookup, expected_fingerprint=expected_host_fingerprint)
+    key = check_identity_key(identity, home=home)
+    kh = check_known_host(known_hosts or (home / ".ssh" / "known_hosts"),
+                          lookup=lookup, expected_fingerprint=expected_host_fingerprint,
+                          home=home)
     # -F /dev/null prevents silently consuming ~/.ssh/config. Host and identity
     # are explicit and pinned, as is the server's expected ED25519 host key.
     argv = [validate_system_executable(LOCAL_SSH), "-F", "/dev/null", "-T",
@@ -331,7 +386,7 @@ def remote_status(host: str, identity: Path, executor=subprocess.run,
         raise ValueError("SSH_FAILED")
     try:
         return safe_remote_result(result.stdout.strip())
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, TypeError, json.JSONDecodeError):
         raise ValueError("REMOTE_STATUS_UNVERIFIABLE") from None
 
 
@@ -340,7 +395,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sv", action="store_true", help="Opt in to fixed SV read-only SSH probe")
     args = parser.parse_args(argv)
     try:
-        result = remote_status(SV_HOST, Path.home() / SV_KEY_RELATIVE) if args.sv else local_inventory()
+        result = remote_status(SV_HOST, trusted_account_home() / SV_KEY_RELATIVE) if args.sv else local_inventory()
     except (ValueError, OSError):
         # No raw exception messages; they may contain system paths or ssh details.
         print(json.dumps({"schema": SCHEMA, "status": "HOLD_UNVERIFIED"}, sort_keys=True))
