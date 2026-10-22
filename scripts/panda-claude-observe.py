@@ -7,7 +7,7 @@
 
 The default action only checks known macOS app-bundle locations. The separate
 --sv option invokes ONE fixed Python probe via existing strict SSH; it does not
-install apps, log in, inspect credentials, relay tokens or start model calls.
+install apps, log in, export credential values, relay tokens or start model calls.
 Not a production CCBaga GUI integration or account eligibility check.
 """
 from __future__ import annotations
@@ -86,6 +86,8 @@ if version_result is not None and version_result.returncode == 0:
     if match:
         out["version"] = match.group(0)
 
+# The official CLI may inspect its local credential store internally.
+# This observer emits only a bounded status enum, never CLI stdout/stderr.
 auth_result = check([str(cli), "auth", "status", "--text"])
 if auth_result is not None:
     result = (auth_result.stdout + "\n" + auth_result.stderr).lower()[:4096]
@@ -216,7 +218,7 @@ def safe_remote_result(payload: str) -> dict:
     return {"schema": SCHEMA, "scope": "SV_READ_ONLY_STATUS_ONLY",
             "identity": "ubuntu/1000", "cli": value["cli"],
             "version": version, "auth": value["auth"],
-            "credential_values_read": False, "eligibility_verified": False}
+            "credential_values_transmitted": False, "eligibility_verified": False}
 
 
 def remote_status(host: str, identity: Path, executor=subprocess.run,
