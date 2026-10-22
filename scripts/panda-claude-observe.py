@@ -16,7 +16,6 @@ import argparse
 import base64
 import errno
 import hashlib
-import contextlib
 import json
 import os
 import plistlib
@@ -185,7 +184,7 @@ def _read_bundle_plist(parent: Path, bundle_name: str) -> tuple[str, dict | None
 
 
 def local_inventory(home: Path = None, system_app_dir: Path = None) -> dict:
-    """Observe only standard locations. Unknown ≠ absent. Never start an app."""
+    """Descriptor-based standard-location checks; errors never mean proven absence."""
     home = home or Path.home()
     system_app_dir = system_app_dir or Path("/Applications")
     applications = {}
